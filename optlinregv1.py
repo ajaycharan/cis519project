@@ -1,5 +1,10 @@
 import csv
 import numpy as np
+from math import radians, cos, sin, asin, sqrt
+import matplotlib.pyplot as plt
+from sklearn import linear_model, svm, gaussian_process
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
 stationToLOL = {}
 stationToPos = {
@@ -52,6 +57,8 @@ timestampdiffLoc = 13
 sourceLoc = 7
 nextLoc = 2
 timeRawLoc = 16
+lonLoc = 5
+latLoc = 6
 
 # End result below
 # status, trainid, day, month, timestampdiff (secs), distance (calculated), time (converted to Unix)
@@ -59,6 +66,23 @@ timeRawLoc = 16
 def get_sec(time_str):
     h, m, s = time_str.split(':')
     return int(h) * 3600 + int(m) * 60 + int(s)
+
+
+def getDistance(sourceGPS, nextGPS):
+    #Using Haversine formula
+    sourceLon = float(sourceGPS[0])
+    sourceLat = float(sourceGPS[1])
+    nextLon = float(nextGPS[0])
+    nextLat = float(nextGPS[1])
+    sourceLon, sourceLat, nextLon, nextLat = map(radians, [sourceLon, sourceLat, nextLon, nextLat])
+
+    dLon = nextLon - sourceLon
+    dLat = nextLat - sourceLat
+    a = sin(dLat/2)**2 + cos(sourceLat) * cos(nextLat) * sin(dLon/2)**2
+    c = 2 * asin(sqrt(a)) 
+    r = 6371 # Radius of earth in kilometers. Use 3956 for miles
+    return int(c * r)
+
 
 # preprocess the data 
 with open('newark_norristown.csv', 'rb') as csvfile:
@@ -74,8 +98,12 @@ with open('newark_norristown.csv', 'rb') as csvfile:
         nextRow = [row[statusLoc], row[trainIdLoc], row[dayLoc], row[monthLoc], row[timestampdiffLoc]] 
         # calculate distance
         source = row[sourceLoc]
-        nextStation = row[nextLoc] 
-        distance = abs(stationToPos[nextStation] - stationToPos[source]) - 1
+        sourceGPS = [row[lonLoc],row[latLoc]]
+        
+        nextStation = row[nextLoc]
+        nextGPS = [row[lonLoc],row[latLoc]]
+
+        distance = getDistance(sourceGPS, nextGPS)
         nextRow.append(distance)
         # convert to secs 
         secs = get_sec(row[timeRawLoc]) 
@@ -92,8 +120,68 @@ with open('newark_norristown.csv', 'rb') as csvfile:
         else: 
             stationToLOL[currentStation] = [nextRow]
 
-arrOfMatrices = []
+stationScoreWithSplit = []
+stationScoreCrossValidated = []
+classifiersSplit = []
+data_mat = []
+station_name = []
 for key, value in stationToLOL.iteritems():
-    arrOfMatrices.append(np.reshape(value, newshape=(len(value), 7)))
+    #data_mat.append(np.reshape(value, newshape=(len(value), '''7''' 6)))
+    data_mat.append(np.reshape(value, newshape=(len(value), 7)))
+    station_name.append(posToStation[key])
 
-# arr OfMatrices has array for each matrix
+# data_mat has array for each matrix
+score_mat = []
+train_proportion = 0.7
+num_iterations = 10
+ind = 0
+for stationData in data_mat:
+    #stationData = data_mat[:,:,stationID]
+    X = None 
+    y = None
+    X = stationData[:,1:]
+    y = np.array([stationData[:, 0]]).T
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=1-train_proportion, random_state=42)
+
+    # n,d = X.shape
+    # idx = np.arange(n)
+    # np.random.seed(13)
+    # np.random.shuffle(idx)
+    # X = X[idx]
+    # y = y[idx]
+    # split_idx=train_proportion*n
+    # X_train = X[:(split_idx - 1),:]
+    # y_train = y[:(split_idx - 1),:]
+    # X_test = X[split_idx:,:]
+    # y_test = y[split_idx:,:]
+
+    #rs = ShuffleSplit(n_splits=num_iterations, train_size=train_proportion, random_state=0)
+    #clf = svm.SVR()
+    clf = linear_model.LinearRegression()
+    #clf = gaussian_process.GaussianProcessRegressor()
+    clf = clf.fit(X_train, y_train)
+    classifiersSplit.append(clf)
+    y_pred = None
+    y_pred = clf.predict(X_test) 
+    #y_pred = abs(np.round(y_pred))
+    y_pred[y_pred < 0] = 0
+    y_pred = np.round(y_pred)
+    #score = clf.score(X_test, y_test)
+    #score = accuracy_score(y_test, y_pred)
+    score = np.sum(abs(y_pred - y_test)) / y_pred.shape[0]
+    stationScoreWithSplit.append(score)
+    score_mat.append(score)
+    # print 'for staion ID %d', ind
+    # print 'the score for 70-30 simple split is: ', score
+    
+    # cross_scores = cross_val_score(clf, X, y,cv=5)
+    # stationScoreCrossValidated.append(cross_scores)
+    # print 'the cross validated scores are: ', cross_scores
+    ind += 1 
+
+results = [] 
+results.append(score_mat) 
+results.append(station_name)
+resultFile = open("lrOutput.csv",'wb')
+wr = csv.writer(resultFile, dialect='excel')
+wr.writerows(results)
